@@ -1,0 +1,105 @@
+#compdef AI
+
+# Zsh completion and command expansion for "AI" using OpenAI-compatible APIs.
+# Requires: curl, jq, and an environment variable OPENAI_API_KEY set.
+
+# Usage:
+#   Type: AI <your natural language command> <TAB>
+#   The buffer will be replaced with the generated shell command(s).
+#
+# Installation:
+#   1. Copy this file to a directory in your $fpath (e.g., ~/.zsh/completions).
+#   2. Ensure you have curl and jq installed.
+#   3. Set your OpenAI API key in the environment variable OPENAI_API_KEY.
+#   4. Add the directory to your fpath in .zshrc: fpath=(~/.zsh/completions $fpath)
+#   5. Restart your shell or source your .zshrc.
+
+_ai_expand_command() {
+  local prompt="$*"
+  # Support both OpenAI and Azure OpenAI compatible APIs
+  local api_base="${OPENAI_API_BASE:-https://api.openai.com/v1}"
+  local api_url="${OPENAI_API_URL:-$api_base/chat/completions}"
+  local model="${OPENAI_MODEL:-gpt-3.5-turbo}"
+  local api_key="${OPENAI_API_KEY:-$OPENAI_API_KEY_DEFAULT}"
+
+  if [[ -z "$api_key" ]]; then
+    print "OPENAI_API_KEY not set" >&2
+    return 1
+  fi
+
+  # Request completion from API
+  local response
+  response=$(curl -sS -X POST "$api_url" \
+    -H "Authorization: Bearer $api_key" \
+    -H "Content-Type: application/json" \
+    -d @- <<EOF
+{
+  "model": "$model",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant that writes concise, correct shell commands. Only output the command, nothing else. Do not use markdown formatting or code blocks, just output the command."},
+    {"role": "user", "content": "$prompt"}
+  ],
+  "max_tokens": 128,
+  "temperature": 0
+}
+EOF
+  )
+
+  # Remove all control characters except newline (ASCII 10) before parsing
+  response=$(echo "$response" | perl -pe 's/[\x00-\x09\x0B\x0C\x0E-\x1F]//g')
+
+  # Debug: print response to a file for troubleshooting
+  echo "$response" > ~/.ai_last_response.json
+
+  # Fix JSON to preserve newlines in the content field, then extract the content
+  local fixed_response
+  fixed_response=$(echo "$response" | sed ':a;N;$!ba;s/\("content":"\)\(.*\)\(".*\)/\1\2\3/' | tr '\n' ';' | sed 's/"content":"\(.*\)"/"content":"\1"/g' | sed 's/\\n/\n/g')
+  local command
+  command=$(echo "$fixed_response" | jq -r '.choices[0].message.content' 2>/dev/null | perl -pe 's/\r//g' | sed '/^```/d')
+
+  # Remove any leading/trailing and empty lines
+  command=$(echo "$command" | awk 'NF')
+
+  if [[ "$command" == "null" || -z "$command" ]]; then
+    print "AI: No command generated. See ~/.ai_last_response.json for details." >&2
+    return 1
+  fi
+
+  # Remove any control characters that may break shell (excluding newlines)
+  command=$(echo "$command" | perl -pe 's/[\x00-\x09\x0B\x0C\x0E-\x1F]//g')
+
+  # Join commands with ' ; ' (do not use tr, use paste for correct spacing)
+  command=$(echo "$command" | awk 'NF' | paste -sd' ; ' -)
+  # Remove a trailing separator, if present
+  command=$(echo "$command" | sed 's/ ; *$//')
+
+  print -r -- "$command"
+}
+
+_ai_replace_with_ai_command() {
+  # Only trigger if the buffer starts with "AI "
+  if [[ $BUFFER == AI\ * ]]; then
+    local prompt="${BUFFER#AI }"
+    local command
+    command=$(_ai_expand_command "$prompt" 2>~/.ai_command_error)
+    if [[ -n "$command" ]]; then
+      BUFFER="$command"
+      CURSOR=${#BUFFER}
+    else
+      if [[ -s ~/.ai_command_error ]]; then
+        zle -M "$(cat ~/.ai_command_error)"
+        : > ~/.ai_command_error
+      else
+        zle -M "AI: No command generated."
+      fi
+    fi
+  else
+    zle expand-or-complete
+  fi
+}
+
+zle -N _ai_replace_with_ai_command
+bindkey '^I' _ai_replace_with_ai_command  # Bind TAB to this widget
+
+# Optionally, you can use a different keybinding, e.g.:
+# bindkey '^X^A' _ai_replace_with_ai_command  # Ctrl-X Ctrl-A
