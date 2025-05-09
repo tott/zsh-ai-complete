@@ -45,7 +45,7 @@ _ai_expand_command() {
 EOF
   )
 
-  # Remove all control characters except newline (ASCII 10) before parsing
+  # Remove all control characters
   response=$(echo "$response" | tr -d '\000-\037')
 
   # Debug: print response to a file for troubleshooting
