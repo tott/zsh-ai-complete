@@ -36,7 +36,7 @@ _ai_expand_command() {
 {
   "model": "$model",
   "messages": [
-    {"role": "system", "content": "You are a helpful assistant that writes concise, correct shell commands. Only output the command, nothing else. Do not use markdown formatting or code blocks, just output the command."},
+    {"role": "system", "content": "You are a helpful assistant that writes concise, correct shell commands. Only output the command, nothing else. Do not use markdown formatting or code blocks, just output the command. control characters from U+0000 through U+001F must be escaped"},
     {"role": "user", "content": "$prompt"}
   ],
   "max_tokens": 128,
@@ -46,16 +46,14 @@ EOF
   )
 
   # Remove all control characters except newline (ASCII 10) before parsing
-  response=$(echo "$response" | perl -pe 's/[\x00-\x09\x0B\x0C\x0E-\x1F]//g')
+  response=$(echo "$response" | tr -d '\000-\037')
 
   # Debug: print response to a file for troubleshooting
   echo "$response" > ~/.ai_last_response.json
 
   # Fix JSON to preserve newlines in the content field, then extract the content
-  local fixed_response
-  fixed_response=$(echo "$response" | sed ':a;N;$!ba;s/\("content":"\)\(.*\)\(".*\)/\1\2\3/' | tr '\n' ';' | sed 's/"content":"\(.*\)"/"content":"\1"/g' | sed 's/\\n/\n/g')
   local command
-  command=$(echo "$fixed_response" | jq -r '.choices[0].message.content' 2>/dev/null | perl -pe 's/\r//g' | sed '/^```/d')
+  command=$(echo "$response" | jq -r '.choices[0].message.content' 2>/dev/null | sed '/^```/d')
 
   # Remove any leading/trailing and empty lines
   command=$(echo "$command" | awk 'NF')
@@ -64,14 +62,6 @@ EOF
     print "AI: No command generated. See ~/.ai_last_response.json for details." >&2
     return 1
   fi
-
-  # Remove any control characters that may break shell (excluding newlines)
-  command=$(echo "$command" | perl -pe 's/[\x00-\x09\x0B\x0C\x0E-\x1F]//g')
-
-  # Join commands with ' ; ' (do not use tr, use paste for correct spacing)
-  command=$(echo "$command" | awk 'NF' | paste -sd' ; ' -)
-  # Remove a trailing separator, if present
-  command=$(echo "$command" | sed 's/ ; *$//')
 
   print -r -- "$command"
 }
